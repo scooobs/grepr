@@ -1,7 +1,7 @@
 use std::{fmt::Display, fs};
 
 trait Searchable {
-    fn search(&self, query: &str) -> Option<Vec<GreprMatch>>;
+    fn search(&self, query: &str, recursive: &bool) -> Option<Vec<GreprMatch>>;
 }
 
 pub struct GreprMatch {
@@ -31,7 +31,7 @@ pub struct File {
 }
 
 impl Searchable for File {
-    fn search(&self, query: &str) -> Option<Vec<GreprMatch>> {
+    fn search(&self, query: &str, _: &bool) -> Option<Vec<GreprMatch>> {
         let contents = fs::read_to_string(&self.pathname);
         if contents.is_err() {
             return None;
@@ -65,7 +65,7 @@ impl Display for Directory {
 }
 
 impl Searchable for Directory {
-    fn search(&self, query: &str) -> Option<Vec<GreprMatch>> {
+    fn search(&self, query: &str, recursive: &bool) -> Option<Vec<GreprMatch>> {
         let mut matches: Vec<GreprMatch> = Vec::new();
 
         let paths = fs::read_dir(&self.pathname);
@@ -79,16 +79,32 @@ impl Searchable for Directory {
                 Err(_) => continue,
             };
 
-            let file = File {
-                pathname: String::from(format!(
-                    "{}/{}",
-                    self.pathname,
-                    path.file_name().to_str().unwrap()
-                )),
-            };
+            if let Ok(file_type) = path.file_type() {
+                if file_type.is_file() {
+                    let file = File {
+                        pathname: String::from(format!(
+                            "{}/{}",
+                            self.pathname,
+                            path.file_name().to_str().unwrap()
+                        )),
+                    };
 
-            if let Some(mut results) = file.search(query) {
-                (&mut matches).append(&mut results);
+                    if let Some(mut results) = file.search(query, recursive) {
+                        (&mut matches).append(&mut results);
+                    }
+                } else if file_type.is_dir() && *recursive {
+                    let dir = Directory {
+                        pathname: String::from(format!(
+                            "{}/{}",
+                            self.pathname,
+                            path.file_name().to_str().unwrap()
+                        )),
+                    };
+
+                    if let Some(mut results) = dir.search(query, recursive) {
+                        (&mut matches).append(&mut results);
+                    }
+                }
             }
         }
 
@@ -124,20 +140,30 @@ impl Config {
 
         let mut files: Vec<File> = Vec::new();
         let mut directories: Vec<Directory> = Vec::new();
+        let mut recursive = false;
 
-        filter_paths(&mut files, &mut directories, &paths);
+        filter_paths(&mut files, &mut directories, &mut recursive, &paths);
 
         Ok(Config {
             query,
             files,
             directories,
-            recursive: false,
+            recursive,
         })
     }
 }
 
-fn filter_paths(files: &mut Vec<File>, directories: &mut Vec<Directory>, paths: &[String]) {
+fn filter_paths(
+    files: &mut Vec<File>,
+    directories: &mut Vec<Directory>,
+    recursive: &mut bool,
+    paths: &[String],
+) {
     for path in paths {
+        if path.eq("-r") {
+            *recursive = true;
+        }
+
         let metadata = match fs::metadata(path) {
             Ok(m) => m,
             Err(_) => continue,
@@ -158,32 +184,22 @@ fn filter_paths(files: &mut Vec<File>, directories: &mut Vec<Directory>, paths: 
 }
 
 pub fn run(config: Config) {
-    println!("File List");
-    for file in &config.files {
-        println!("{}", file);
-    }
-    println!("Directory List");
-    for dir in &config.directories {
-        println!("{}", dir);
-    }
-
     let mut matches: Vec<GreprMatch> = Vec::new();
 
     for file in &config.files {
-        let results = file.search(&config.query);
+        let results = file.search(&config.query, &config.recursive);
         if results.is_some() {
             (&mut matches).append(&mut results.unwrap())
         }
     }
 
     for dir in &config.directories {
-        let results = dir.search(&config.query);
+        let results = dir.search(&config.query, &config.recursive);
         if results.is_some() {
             (&mut matches).append(&mut results.unwrap())
         }
     }
 
-    println!("Matches: ");
     for grepr_match in &matches {
         println!("{}", grepr_match)
     }
