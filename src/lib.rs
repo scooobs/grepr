@@ -1,3 +1,4 @@
+mod threading;
 use std::{fmt::Display, fs};
 
 trait Searchable {
